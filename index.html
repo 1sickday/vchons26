@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Joel Brevig – Overview Mapping</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%;
+    overflow: hidden;
+    background: #000;
+    font-family: Helvetica, Arial, sans-serif;
+  }
+
+  #scanCanvas {
+    position: fixed;
+    inset: 0;
+    width: 100%; height: 100%;
+    display: block;
+    z-index: 1;
+  }
+
+  #overlayImg {
+    position: fixed;
+    inset: 0;
+    width: 100%; height: 100%;
+    object-fit: cover;
+    mix-blend-mode: screen;
+    pointer-events: none;
+    z-index: 10;
+    opacity: 0.9;
+  }
+
+  #wipeGlow {
+    display: none;
+  }
+
+  #thumbStrip {
+    position: fixed;
+    left: 0; top: 0; bottom: 0;
+    width: 88px;
+    background: rgba(10,10,10,0.72);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-right: 1px solid rgba(255,255,255,0.08);
+    z-index: 30;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 14px 0;
+    gap: 8px;
+    overflow-y: auto;
+  }
+  .thumb {
+    width: 64px;
+    aspect-ratio: 1.414;
+    border: 1.5px solid rgba(255,255,255,0.15);
+    border-radius: 2px;
+    overflow: hidden;
+    cursor: pointer;
+    position: relative;
+    background: #1a1a1a;
+    transition: border-color 0.15s;
+    flex-shrink: 0;
+  }
+  .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; filter: brightness(0.85); transition: filter 0.15s; }
+  .thumb:hover img { filter: brightness(1); }
+  .thumb.active { border-color: rgba(180,235,255,0.85); box-shadow: 0 0 0 1px rgba(180,235,255,0.3); }
+  .thumb.active img { filter: brightness(1); }
+  .thumb-num { position: absolute; bottom: 2px; right: 3px; font-size: 8px; color: rgba(255,255,255,0.7); font-weight: 600; font-family: Helvetica, Arial, sans-serif; }
+
+  #controls {
+    position: fixed;
+    bottom: 28px;
+    right: 28px;
+    z-index: 30;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .ctrl-btn {
+    height: 36px;
+    padding: 0 16px;
+    background: rgba(40,40,40,0.82);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: none;
+    border-radius: 18px;
+    color: rgba(255,255,255,0.6);
+    font-family: Helvetica, Arial, sans-serif;
+    font-size: 13px;
+    font-weight: 400;
+    cursor: pointer;
+    transition: background 0.1s;
+    white-space: nowrap;
+  }
+  .ctrl-btn:hover { background: rgba(60,60,60,0.90); color: rgba(255,255,255,0.85); }
+  .ctrl-btn:active { background: rgba(25,25,25,0.96); }
+  .ctrl-btn:disabled { opacity: 0.3; cursor: default; pointer-events: none; }
+
+  #counter {
+    height: 36px;
+    padding: 0 16px;
+    background: rgba(40,40,40,0.82);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border-radius: 18px;
+    color: rgba(255,255,255,0.6);
+    font-family: Helvetica, Arial, sans-serif;
+    font-size: 13px;
+    font-weight: 400;
+    display: flex;
+    align-items: center;
+  }
+</style>
+</head>
+<body>
+
+<canvas id="scanCanvas"></canvas>
+<img id="overlayImg" src="img/SCANOVERLAY.png">
+<div id="wipeGlow"></div>
+<div id="thumbStrip"></div>
+
+<div id="controls">
+  <button class="ctrl-btn" id="btnPrev" onclick="navigate(-1)">Prev</button>
+    <button class="ctrl-btn" id="btnNext" onclick="navigate(1)">Next</button>
+  <div id="counter">1/8</div>
+</div>
+
+<script>
+const images = [
+  { src : "img/MAP1.jpg" },
+  { src : "img/MAP2.jpg" },
+  { src : "img/MAP3.jpg" },
+  { src : "img/MAP4.jpg" },
+  { src : "img/MAP5.jpg" },
+  { src : "img/MAP6.jpg" },
+  { src : "img/MAP7.jpg" },
+  { src : "img/MAP8.jpg" }
+];
+
+let current = 0;
+let busy = false;
+
+const canvas      = document.getElementById('scanCanvas');
+const ctx         = canvas.getContext('2d');
+const wipeGlow    = document.getElementById('wipeGlow');
+const counter     = document.getElementById('counter');
+const btnPrev     = document.getElementById('btnPrev');
+const btnNext     = document.getElementById('btnNext');
+const thumbStrip  = document.getElementById('thumbStrip');
+
+const imgEls = images.map(d => {
+  const im = new Image();
+  im.src = d.src;
+  return im;
+});
+
+function resizeCanvas() {
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width  = window.innerWidth  * dpr;
+  canvas.height = window.innerHeight * dpr;
+  canvas.style.width  = window.innerWidth  + 'px';
+  canvas.style.height = window.innerHeight + 'px';
+  ctx.scale(dpr, dpr);
+  if (!busy) drawFull(imgEls[current]);
+}
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
+
+function drawFull(imgEl, alpha) {
+  if (!imgEl || !imgEl.complete || imgEl.naturalWidth === 0) return;
+  const W = window.innerWidth, H = window.innerHeight;
+  ctx.save();
+  if (alpha !== undefined) ctx.globalAlpha = alpha;
+  const scale = Math.max(W / imgEl.naturalWidth, H / imgEl.naturalHeight);
+  const sw = imgEl.naturalWidth * scale, sh = imgEl.naturalHeight * scale;
+  ctx.drawImage(imgEl, (W - sw) / 2, (H - sh) / 2, sw, sh);
+  ctx.restore();
+}
+
+// Smooth noise for wiggle
+let noiseSeed = 0;
+function seededRand(n) {
+  const x = Math.sin(n * 127.1 + noiseSeed * 311.7) * 43758.5453;
+  return x - Math.floor(x);
+}
+function smoothNoise(x) {
+  const i = Math.floor(x);
+  const f = x - i;
+  const f2 = f * f * (3 - 2 * f);
+  return seededRand(i) + (seededRand(i + 1) - seededRand(i)) * f2;
+}
+function wiggledProgress(t) {
+  const n1 = smoothNoise(t * 4.0);
+  const n2 = smoothNoise(t * 9.0 + 2.3) * 0.4;
+  const noise = (n1 + n2) / 1.4;
+  const wiggle = (noise - 0.5) * 0.22;
+  return Math.max(0, Math.min(1, t + wiggle * Math.sin(Math.PI * t)));
+}
+
+// Left-to-right wipe, from image stays on right, new image reveals on left
+// Duration: 1100ms * 3 = 3300ms
+const WIPE_MS = 3300;
+
+function wipeTransition(fromImg, toImg) {
+  noiseSeed = Math.random() * 1000;
+  const dpr = window.devicePixelRatio || 1;
+  const W = window.innerWidth, H = window.innerHeight;
+
+  const offTo = new OffscreenCanvas(W * dpr, H * dpr);
+  const octxTo = offTo.getContext('2d');
+  octxTo.scale(dpr, dpr);
+  if (toImg && toImg.complete && toImg.naturalWidth) {
+    const scale = Math.max(W / toImg.naturalWidth, H / toImg.naturalHeight);
+    const sw = toImg.naturalWidth * scale, sh = toImg.naturalHeight * scale;
+    octxTo.drawImage(toImg, (W - sw) / 2, (H - sh) / 2, sw, sh);
+  }
+
+  const offFrom = new OffscreenCanvas(W * dpr, H * dpr);
+  const octxFrom = offFrom.getContext('2d');
+  octxFrom.scale(dpr, dpr);
+  if (fromImg && fromImg.complete && fromImg.naturalWidth) {
+    const scale = Math.max(W / fromImg.naturalWidth, H / fromImg.naturalHeight);
+    const sw = fromImg.naturalWidth * scale, sh = fromImg.naturalHeight * scale;
+    octxFrom.drawImage(fromImg, (W - sw) / 2, (H - sh) / 2, sw, sh);
+  }
+
+  let start = null;
+
+  const TARGET_FPS = 10;
+  const FRAME_MS = 1000 / TARGET_FPS;
+  let lastFrameTs = -Infinity;
+
+  function frame(ts) {
+    if (!start) start = ts;
+
+    // Posterise time — only commit a new frame every ~100ms
+    const shouldDraw = (ts - lastFrameTs) >= FRAME_MS;
+    const tLinear = Math.min((ts - start) / WIPE_MS, 1);
+    if (shouldDraw || tLinear >= 1) {
+      lastFrameTs = ts;
+
+      const tWiggle = wiggledProgress(tLinear);
+      const revealX = Math.floor(tWiggle * W);
+
+      ctx.clearRect(0, 0, W, H);
+
+      // Old image on the right
+      if (revealX < W) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(revealX, 0, W - revealX, H);
+        ctx.clip();
+        ctx.drawImage(offFrom, 0, 0, W, H);
+        ctx.restore();
+      }
+
+      // New image on the left
+      if (revealX > 0) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(0, 0, revealX, H);
+        ctx.clip();
+        ctx.drawImage(offTo, 0, 0, W, H);
+        ctx.restore();
+      }
+
+
+    }
+
+    if (tLinear < 1) {
+      requestAnimationFrame(frame);
+    } else {
+      ctx.clearRect(0, 0, W, H);
+      drawFull(toImg);
+      busy = false;
+      updateButtons();
+    }
+  }
+
+  requestAnimationFrame(frame);
+}
+
+// Build thumbs
+images.forEach((img, i) => {
+  const d = document.createElement('div');
+  d.className = 'thumb' + (i === 0 ? ' active' : '');
+  d.id = 'thumb' + i;
+  d.onclick = () => goTo(i);
+  const im = document.createElement('img');
+  im.src = img.src;
+  const n = document.createElement('div');
+  n.className = 'thumb-num';
+  n.textContent = i + 1;
+  d.appendChild(im); d.appendChild(n);
+  thumbStrip.appendChild(d);
+});
+
+function updateButtons() {
+  btnPrev.disabled = current === 0;
+  btnNext.disabled = current === images.length - 1;
+}
+
+function updateUI(i) {
+  counter.textContent = (i + 1) + '/' + images.length;
+  document.querySelectorAll('.thumb').forEach((t, idx) => t.classList.toggle('active', idx === i));
+  const at = document.getElementById('thumb' + i);
+  if (at) at.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
+
+function goTo(i) {
+  if (busy) return;
+  busy = true;
+  btnPrev.disabled = true;
+  btnNext.disabled = true;
+  const from = current;
+  current = i;
+  updateUI(i);
+
+  const go = () => wipeTransition(imgEls[from], imgEls[i]);
+  if (imgEls[i].complete) go();
+  else imgEls[i].onload = go;
+}
+
+function navigate(dir) {
+  if (busy) return;
+  const n = current + dir;
+  if (n < 0 || n >= images.length) return;
+  goTo(n);
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'ArrowLeft')  navigate(-1);
+  if (e.key === 'ArrowRight') navigate(1);
+});
+
+// Init
+const firstImg = imgEls[0];
+if (firstImg.complete) drawFull(firstImg);
+else firstImg.onload = () => drawFull(firstImg);
+updateUI(0);
+updateButtons();
+</script>
+</body>
+</html>
